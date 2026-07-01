@@ -29,6 +29,7 @@ push / pull_request
 | `semgrep-rules/` | Custom Semgrep rules (insecure deserialization, hardcoded secret, Flask debug). |
 | `vulnerable-app/` | A deliberately vulnerable Flask app so every scanner fires. |
 | `third-party/pygoat` | OWASP PyGoat, a well-known vulnerable Django app, pinned as a submodule. |
+| `third-party/vampi` | VAmPI, a vulnerable REST API (OWASP API Top 10), pinned as a submodule. |
 | `Makefile` | Local build/test/gate helpers. |
 
 ## The scanners
@@ -123,9 +124,13 @@ deployed or exposed to untrusted input.
   a well-known intentionally vulnerable Django application, included as a git
   submodule pinned to a fixed commit. It provides a larger, realistic Python
   codebase for the Python-based scanners (CodeQL, Semgrep) to exercise.
+- **`third-party/vampi`** — [VAmPI](https://github.com/erev0s/VAmPI), a
+  deliberately vulnerable REST API (MIT-licensed, Flask) built to exercise the
+  OWASP API Security Top 10, included as a git submodule pinned to a fixed
+  commit. It adds API-shaped Python vulnerabilities to the scan surface.
 
-Because PyGoat is a submodule, a plain clone leaves its directory empty. It is
-fetched with:
+Because the third-party targets are submodules, a plain clone leaves their
+directories empty. They are fetched with:
 
 ```sh
 git clone --recurse-submodules <repo-url>
