@@ -1,9 +1,9 @@
 name: Ad-hoc scan
 
 # On-demand SAST run. Feed it either a public repo/gist URL to clone, or a
-# file's contents from the gh CLI, and it runs Semgrep + Gitleaks + the gate
-# against that input. The target is only ever read (statically scanned) — it is
-# never executed.
+# file's contents from the gh CLI, and it runs Semgrep + Gitleaks + CodeQL and
+# the gate against that input. The target is only ever read (statically
+# scanned) — it is never executed.
 #
 # Examples:
 #   # Scan a public repository:
@@ -12,9 +12,10 @@ name: Ad-hoc scan
 #   # "Upload" a local file's contents and scan it:
 #   gh workflow run adhoc-scan.yml -f filename=app.py -f code="$(cat ./app.py)"
 #
-# Results are printed to the run summary and uploaded as the "adhoc-sarif"
-# artifact. Deliberately not sent to the Security tab, so throwaway scans don't
-# mix with the repository's real code-scanning alerts.
+# This run never fails on findings: no merge is happening, so the gate is purely
+# informational. It prints a "WOULD PASS / WOULD FAIL" verdict to the run
+# summary and logs, and uploads each scanner's SARIF as its own downloadable
+# artifact. Nothing is written to the repository or the Security tab.
 on:
   workflow_dispatch:
     inputs:
@@ -31,7 +32,7 @@ on:
         required: false
         default: ""
       threshold:
-        description: "Severity at or above which the run fails"
+        description: "Severity used for the WOULD PASS / WOULD FAIL verdict"
         required: false
         default: "HIGH"
         type: choice
@@ -39,6 +40,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   adhoc:
@@ -57,6 +59,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.23"
+          cache: false
 
       - name: Materialize the scan target
         # Inputs are passed through the environment (not interpolated into the
@@ -83,7 +86,7 @@ jobs:
           echo "--- files to scan ---"
           find scan-input -type f | head -100
 
-      - name: Install scanners
+      - name: Install Semgrep and Gitleaks
         run: |
           set -euo pipefail
           pip install --quiet semgrep
@@ -92,6 +95,7 @@ jobs:
           sudo install gitleaks /usr/local/bin/gitleaks
 
       - name: Run Semgrep
+        continue-on-error: true
         run: |
           semgrep scan \
             --config p/owasp-top-ten \
@@ -103,6 +107,7 @@ jobs:
             scan-input
 
       - name: Run Gitleaks
+        continue-on-error: true
         run: |
           gitleaks detect \
             --source scan-input \
@@ -112,24 +117,100 @@ jobs:
             --redact \
             --exit-code 0
 
+      # CodeQL builds a database, so it is slower and only covers Python here. If
+      # the target has no Python it is simply skipped (continue-on-error), and
+      # analysis is restricted to scan-input via the paths config. upload: never
+      # keeps ad-hoc results out of the Security tab.
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        continue-on-error: true
+        with:
+          languages: python
+          queries: security-extended
+          config: |
+            paths:
+              - scan-input
+
+      - name: Analyze with CodeQL
+        uses: github/codeql-action/analyze@v3
+        continue-on-error: true
+        with:
+          output: codeql-results
+          upload: never
+
       - name: Build the gate binary
+        if: always()
         run: go build -trimpath -o sarifgate ./cmd/sarifgate
 
-      - name: Merge, deduplicate and gate
+      - name: Merge, evaluate and report (non-blocking)
+        if: always()
         run: |
-          ./sarifgate \
-            -threshold "${{ inputs.threshold }}" \
+          set +e
+          shopt -s nullglob
+          # Collect only the SARIF files that were actually produced.
+          SARIFS=()
+          for f in semgrep.sarif gitleaks.sarif codeql-results/*.sarif; do
+            [ -f "$f" ] && SARIFS+=("$f")
+          done
+          echo "Merging: ${SARIFS[*]:-<none>}"
+
+          if [ ${#SARIFS[@]} -eq 0 ]; then
+            echo "### ⚠️ No SARIF produced — nothing to evaluate." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # -summary writes the severity table + finding list to the run summary.
+          ./sarifgate -threshold "${{ inputs.threshold }}" \
             -output merged.sarif \
             -summary "$GITHUB_STEP_SUMMARY" \
-            semgrep.sarif gitleaks.sarif
+            "${SARIFS[@]}"
+          verdict=$?
 
-      - name: Upload SARIF artifacts
+          {
+            echo ""
+            echo "---"
+            if [ "$verdict" -eq 0 ]; then
+              echo "### ✅ Verdict: this input **WOULD PASS** the gate at ${{ inputs.threshold }}."
+            else
+              echo "### ❌ Verdict: this input **WOULD FAIL** the gate at ${{ inputs.threshold }}."
+            fi
+            echo ""
+            echo "_Informational only — this run is intentionally not failed, because no merge is happening._"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+          # Always succeed: the verdict above is the signal, not the job status.
+          exit 0
+
+      # Each SARIF is uploaded as its own artifact so they appear as separate
+      # downloadable entries rather than one bundle.
+      - name: Upload Semgrep SARIF
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: adhoc-sarif
-          path: |
-            semgrep.sarif
-            gitleaks.sarif
-            merged.sarif
-          if-no-files-found: warn
+          name: adhoc-semgrep-sarif
+          path: semgrep.sarif
+          if-no-files-found: ignore
+
+      - name: Upload Gitleaks SARIF
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: adhoc-gitleaks-sarif
+          path: gitleaks.sarif
+          if-no-files-found: ignore
+
+      - name: Upload CodeQL SARIF
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: adhoc-codeql-sarif
+          path: codeql-results/*.sarif
+          if-no-files-found: ignore
+
+      - name: Upload merged SARIF
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: adhoc-merged-sarif
+          path: merged.sarif
+          if-no-files-found: ignore
