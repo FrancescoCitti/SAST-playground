@@ -1,0 +1,3 @@
+[submodule "third-party/pygoat"]
+	path = third-party/pygoat
+	url = https://github.com/adeyosemanputra/pygoat

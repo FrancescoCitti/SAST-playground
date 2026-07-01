@@ -29,6 +29,8 @@ jobs:
       actions: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - uses: actions/setup-python@v5
         with:
@@ -73,6 +75,8 @@ jobs:
       actions: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
@@ -110,6 +114,7 @@ jobs:
         with:
           # Full history so secrets in past commits are caught too.
           fetch-depth: 0
+          submodules: recursive
 
       - name: Install Gitleaks
         run: |
