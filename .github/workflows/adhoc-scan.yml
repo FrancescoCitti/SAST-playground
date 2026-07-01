@@ -1,0 +1,135 @@
+name: Ad-hoc scan
+
+# On-demand SAST run. Feed it either a public repo/gist URL to clone, or a
+# file's contents from the gh CLI, and it runs Semgrep + Gitleaks + the gate
+# against that input. The target is only ever read (statically scanned) — it is
+# never executed.
+#
+# Examples:
+#   # Scan a public repository:
+#   gh workflow run adhoc-scan.yml -f source_url=https://github.com/OWNER/REPO
+#
+#   # "Upload" a local file's contents and scan it:
+#   gh workflow run adhoc-scan.yml -f filename=app.py -f code="$(cat ./app.py)"
+#
+# Results are printed to the run summary and uploaded as the "adhoc-sarif"
+# artifact. Deliberately not sent to the Security tab, so throwaway scans don't
+# mix with the repository's real code-scanning alerts.
+on:
+  workflow_dispatch:
+    inputs:
+      source_url:
+        description: "Public repo or gist URL to clone and scan (leave blank to use 'code')"
+        required: false
+        default: ""
+      filename:
+        description: "Filename for the 'code' input (basename only)"
+        required: false
+        default: "input.py"
+      code:
+        description: "File contents to scan; usually passed via gh CLI (ignored if source_url is set)"
+        required: false
+        default: ""
+      threshold:
+        description: "Severity at or above which the run fails"
+        required: false
+        default: "HIGH"
+        type: choice
+        options: [CRITICAL, HIGH, MEDIUM, LOW, NONE]
+
+permissions:
+  contents: read
+
+jobs:
+  adhoc:
+    name: Ad-hoc scan
+    runs-on: ubuntu-latest
+    env:
+      GITLEAKS_VERSION: "8.21.2"
+    steps:
+      # Checkout is needed for the custom Semgrep rules and the gate source.
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Materialize the scan target
+        # Inputs are passed through the environment (not interpolated into the
+        # script) so target contents can never be interpreted as shell.
+        env:
+          SOURCE_URL: ${{ inputs.source_url }}
+          FILENAME: ${{ inputs.filename }}
+          CODE: ${{ inputs.code }}
+        run: |
+          set -euo pipefail
+          mkdir -p scan-input
+          if [ -n "$SOURCE_URL" ]; then
+            echo "Cloning $SOURCE_URL"
+            git clone --depth 1 "$SOURCE_URL" scan-input/repo
+          elif [ -n "$CODE" ]; then
+            # basename strips any path, so "../x" can't escape scan-input/.
+            safe="$(basename "$FILENAME")"
+            printf '%s' "$CODE" > "scan-input/$safe"
+            echo "Wrote scan-input/$safe ($(wc -c < "scan-input/$safe") bytes)"
+          else
+            echo "::error::Provide either 'source_url' or 'code'."
+            exit 1
+          fi
+          echo "--- files to scan ---"
+          find scan-input -type f | head -100
+
+      - name: Install scanners
+        run: |
+          set -euo pipefail
+          pip install --quiet semgrep
+          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz gitleaks
+          sudo install gitleaks /usr/local/bin/gitleaks
+
+      - name: Run Semgrep
+        run: |
+          semgrep scan \
+            --config p/owasp-top-ten \
+            --config p/security-audit \
+            --config p/secrets \
+            --config semgrep-rules/ \
+            --sarif --output semgrep.sarif \
+            --metrics off \
+            scan-input
+
+      - name: Run Gitleaks
+        run: |
+          gitleaks detect \
+            --source scan-input \
+            --no-git \
+            --report-format sarif \
+            --report-path gitleaks.sarif \
+            --redact \
+            --exit-code 0
+
+      - name: Build the gate binary
+        run: go build -trimpath -o sarifgate ./cmd/sarifgate
+
+      - name: Merge, deduplicate and gate
+        run: |
+          ./sarifgate \
+            -threshold "${{ inputs.threshold }}" \
+            -output merged.sarif \
+            -summary "$GITHUB_STEP_SUMMARY" \
+            semgrep.sarif gitleaks.sarif
+
+      - name: Upload SARIF artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: adhoc-sarif
+          path: |
+            semgrep.sarif
+            gitleaks.sarif
+            merged.sarif
+          if-no-files-found: warn
