@@ -211,6 +211,17 @@ jobs:
             -L vulnerable-app/requirements.txt \
             --format sarif --output osv.sarif || true
 
+      - name: Normalize OSV SARIF paths
+        # OSV emits absolute file:// URIs; strip the workspace prefix so every
+        # finding maps to a repo file in the Security tab (GitHub otherwise
+        # drops results whose paths fall outside the checkout).
+        run: |
+          jq --arg ws "file://$GITHUB_WORKSPACE/" '
+            walk(if type == "object" and (.uri? | type == "string") and (.uri | startswith($ws))
+                 then .uri |= .[($ws | length):] else . end)
+          ' osv.sarif > osv.normalized.sarif
+          mv osv.normalized.sarif osv.sarif
+
       - name: Upload OSV SARIF to Security tab
         uses: github/codeql-action/upload-sarif@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3
         with:
