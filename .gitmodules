@@ -1,3 +1,6 @@
 [submodule "third-party/pygoat"]
 	path = third-party/pygoat
 	url = https://github.com/adeyosemanputra/pygoat
+[submodule "third-party/vampi"]
+	path = third-party/vampi
+	url = https://github.com/erev0s/VAmPI

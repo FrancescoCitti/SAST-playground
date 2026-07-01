@@ -5,7 +5,10 @@ name: SAST
 # the results stay separable. A final gate job merges everything and fails the
 # build on a severity-threshold breach.
 on:
+  # Push runs only on main; feature branches are covered by their pull request,
+  # so an open PR no longer triggers two duplicate sets of checks.
   push:
+    branches: [main]
   pull_request:
 
 # Allow tools to publish results to the GitHub code-scanning (Security) tab.
