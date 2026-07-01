@@ -49,18 +49,42 @@ func TestResolveSeverityFallbacks(t *testing.T) {
 	// security-severity wins over level.
 	rule := &Rule{Properties: &Properties{SecuritySeverity: "9.5"}}
 	r := Result{Level: "note"}
-	if got := resolveSeverity(r, rule); got != SeverityCritical {
+	if got := resolveSeverity(r, rule, true); got != SeverityCritical {
 		t.Fatalf("security-severity should win, got %s", got)
 	}
 
-	// No security-severity ⇒ fall back to the result level.
-	if got := resolveSeverity(Result{Level: "error"}, nil); got != SeverityHigh {
+	// No security-severity, but the tool DOES score elsewhere ⇒ level maps
+	// straight through (error → HIGH).
+	if got := resolveSeverity(Result{Level: "error"}, nil, true); got != SeverityHigh {
 		t.Fatalf("level fallback failed, got %s", got)
 	}
 
 	// No level on the result ⇒ fall back to the rule's default config.
 	ruleOnly := &Rule{DefaultConfiguration: &Configuration{Level: "warning"}}
-	if got := resolveSeverity(Result{}, ruleOnly); got != SeverityMedium {
+	if got := resolveSeverity(Result{}, ruleOnly, true); got != SeverityMedium {
 		t.Fatalf("default-config fallback failed, got %s", got)
+	}
+}
+
+func TestResolveSeverityCapsUnscoredTools(t *testing.T) {
+	// A tool that provides NO security-severity anywhere: an "error" level is a
+	// policy signal and must be capped at MEDIUM, not promoted to HIGH.
+	if got := resolveSeverity(Result{Level: "error"}, nil, false); got != SeverityMedium {
+		t.Fatalf("unscored error should cap at MEDIUM, got %s", got)
+	}
+	// note stays LOW; the cap only lowers, never raises.
+	if got := resolveSeverity(Result{Level: "note"}, nil, false); got != SeverityLow {
+		t.Fatalf("unscored note should stay LOW, got %s", got)
+	}
+}
+
+func TestDriverHasSecuritySeverity(t *testing.T) {
+	with := []Rule{{ID: "a"}, {ID: "b", Properties: &Properties{SecuritySeverity: "7.0"}}}
+	if !driverHasSecuritySeverity(with) {
+		t.Fatal("expected true when a rule carries security-severity")
+	}
+	without := []Rule{{ID: "a"}, {ID: "b", Properties: &Properties{Tags: []string{"x"}}}}
+	if driverHasSecuritySeverity(without) {
+		t.Fatal("expected false when no rule carries security-severity")
 	}
 }

@@ -89,7 +89,13 @@ func severityFromLevel(level string) Severity {
 // resolveSeverity determines the severity of a single result. It prefers the
 // numeric security-severity attached to the matching rule (this is what GitHub
 // itself uses), then the result's own level, then the rule's default level.
-func resolveSeverity(r Result, rule *Rule) Severity {
+//
+// toolHasSeverity reports whether the result's tool provides a numeric
+// security-severity on *any* of its rules. When it does not, a level of "error"
+// is a policy/style signal (as emitted by IaC and workflow linters), not a
+// scored vulnerability, so it is capped at MEDIUM: the finding stays visible but
+// does not on its own trip a HIGH gate.
+func resolveSeverity(r Result, rule *Rule, toolHasSeverity bool) Severity {
 	if rule != nil && rule.Properties != nil && rule.Properties.SecuritySeverity != "" {
 		if score, err := strconv.ParseFloat(strings.TrimSpace(rule.Properties.SecuritySeverity), 64); err == nil {
 			if sev := severityFromSecurityScore(score); sev != SeverityNone {
@@ -97,12 +103,31 @@ func resolveSeverity(r Result, rule *Rule) Severity {
 			}
 		}
 	}
-	if r.Level != "" {
-		return severityFromLevel(r.Level)
+
+	var sev Severity
+	switch {
+	case r.Level != "":
+		sev = severityFromLevel(r.Level)
+	case rule != nil && rule.DefaultConfiguration != nil && rule.DefaultConfiguration.Level != "":
+		sev = severityFromLevel(rule.DefaultConfiguration.Level)
+	default:
+		// SARIF's default level when nothing is specified is "warning".
+		sev = SeverityMedium
 	}
-	if rule != nil && rule.DefaultConfiguration != nil && rule.DefaultConfiguration.Level != "" {
-		return severityFromLevel(rule.DefaultConfiguration.Level)
+
+	if !toolHasSeverity && sev > SeverityMedium {
+		sev = SeverityMedium
 	}
-	// SARIF's default level when nothing is specified is "warning".
-	return SeverityMedium
+	return sev
+}
+
+// driverHasSecuritySeverity reports whether any rule in a driver carries a
+// numeric security-severity property.
+func driverHasSecuritySeverity(rules []Rule) bool {
+	for i := range rules {
+		if rules[i].Properties != nil && strings.TrimSpace(rules[i].Properties.SecuritySeverity) != "" {
+			return true
+		}
+	}
+	return false
 }

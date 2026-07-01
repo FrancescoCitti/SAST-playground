@@ -80,12 +80,13 @@ func Merge(logs []*Log) *Report {
 			}
 
 			rules := indexRules(run.Tool.Driver.Rules)
+			toolHasSeverity := driverHasSecuritySeverity(run.Tool.Driver.Rules)
 
 			for _, res := range run.Results {
 				rule := lookupRule(rules, res)
 				file, line := res.primaryLocation()
 				fp := fingerprint(res.RuleID, file, line)
-				sev := resolveSeverity(res, rule)
+				sev := resolveSeverity(res, rule, toolHasSeverity)
 				active := res.isActive()
 
 				if existing, ok := byFingerprint[fp]; ok {
