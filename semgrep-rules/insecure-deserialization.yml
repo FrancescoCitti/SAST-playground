@@ -1,0 +1,27 @@
+rules:
+  - id: custom-insecure-deserialization
+    languages: [python]
+    severity: ERROR
+    message: >
+      Insecure deserialization: pickle can execute arbitrary code while
+      deserialising. Never unpickle data from an untrusted or remote source.
+      Use a safe format such as JSON for untrusted input.
+    metadata:
+      category: security
+      cwe:
+        - "CWE-502: Deserialization of Untrusted Data"
+      owasp:
+        - "A08:2021 - Software and Data Integrity Failures"
+      # GitHub maps 7.0–8.9 to the "High" bucket and the Go gate reads the same
+      # score, so this finding will trip the default HIGH threshold.
+      security-severity: "8.1"
+      references:
+        - https://docs.python.org/3/library/pickle.html#module-pickle
+      confidence: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: pickle.loads(...)
+          - pattern: pickle.load(...)
+          - pattern: cPickle.loads(...)
+          - pattern: cPickle.load(...)
+          - pattern: yaml.load($DATA)

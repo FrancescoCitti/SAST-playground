@@ -1,0 +1,16 @@
+# Build output
+/bin/
+# Only the built binary at the repo root, NOT the cmd/sarifgate source package.
+/sarifgate
+*.sarif
+merged.sarif
+
+# Python
+__pycache__/
+*.pyc
+*.db
+.venv/
+
+# Editors
+.idea/
+.vscode/

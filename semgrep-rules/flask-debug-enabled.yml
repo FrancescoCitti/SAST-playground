@@ -1,0 +1,20 @@
+rules:
+  - id: custom-flask-debug-enabled
+    languages: [python]
+    severity: WARNING
+    message: >
+      Flask is started with debug=True. The Werkzeug interactive debugger
+      allows arbitrary code execution on any unhandled exception and must never
+      be enabled outside local development. Run with debug=False in production.
+    metadata:
+      category: security
+      cwe:
+        - "CWE-489: Active Debug Code"
+      owasp:
+        - "A05:2021 - Security Misconfiguration"
+      security-severity: "6.5"
+      confidence: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: $APP.run(..., debug=True, ...)
+          - pattern: flask.Flask(...).run(..., debug=True, ...)
