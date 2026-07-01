@@ -28,6 +28,7 @@ push / pull_request
 | `internal/sarif/` | SARIF model, merge/dedup, severity resolution, and tests. |
 | `semgrep-rules/` | Custom Semgrep rules (insecure deserialization, hardcoded secret, Flask debug). |
 | `vulnerable-app/` | A deliberately vulnerable Flask app so every scanner fires. |
+| `third-party/pygoat` | OWASP PyGoat, a well-known vulnerable Django app, pinned as a submodule. |
 | `Makefile` | Local build/test/gate helpers. |
 
 ## The scanners
@@ -107,44 +108,62 @@ semgrep scan --config semgrep-rules/ --sarif --output semgrep.sarif vulnerable-a
 ./bin/sarifgate -threshold CRITICAL -no-fail semgrep.sarif
 ```
 
-## The vulnerable target
+## Sample targets
 
-`vulnerable-app/` is a tiny Flask app whose only job is to make every scanner
-fire on real, reachable code. Each defect is tagged in a comment with the tool
-expected to catch it. See [`vulnerable-app/README.md`](vulnerable-app/README.md)
-for the full table; at a minimum it covers SQL injection, OS command injection,
-insecure deserialization, a hardcoded secret, and a debug flag left enabled.
+The repository ships two deliberately vulnerable applications so the scanners
+fire on real, reachable code. Both are for scanning only and must never be
+deployed or exposed to untrusted input.
 
-> ⚠️ The vulnerable app is for scanning only. Never deploy or run it against
-> untrusted input.
+- **`vulnerable-app/`** — a tiny in-repo Flask app. Each defect is tagged in a
+  comment with the tool expected to catch it. It covers, at a minimum, SQL
+  injection, OS command injection, insecure deserialization, a hardcoded secret,
+  and a debug flag left enabled. See
+  [`vulnerable-app/README.md`](vulnerable-app/README.md) for the full table.
+- **`third-party/pygoat`** — [OWASP PyGoat](https://github.com/adeyosemanputra/pygoat),
+  a well-known intentionally vulnerable Django application, included as a git
+  submodule pinned to a fixed commit. It provides a larger, realistic Python
+  codebase for the Python-based scanners (CodeQL, Semgrep) to exercise.
 
-## Using it on your own repository
+Because PyGoat is a submodule, a plain clone leaves its directory empty. It is
+fetched with:
 
-1. **Fork** this repository (or copy the `.github/`, `cmd/`, `internal/`,
-   `semgrep-rules/` directories and `go.mod` into your own).
-2. **Enable code scanning.** On GitHub: **Settings → Code security and analysis
-   → Code scanning**. The workflow uploads SARIF itself, so you do **not** need
-   to enable CodeQL's "default setup" — if you do, disable it to avoid a clash
-   with this "advanced" workflow. For private repositories, code scanning
-   requires GitHub Advanced Security.
-3. **Push** to any branch, or open a pull request. The `SAST` workflow runs on
-   both `push` and `pull_request`.
-4. **Read the results.** Open the **Security → Code scanning** tab. Filter by
-   **Tool** to see Semgrep, CodeQL, and Gitleaks results separately (they each
-   uploaded under their own category). Each alert links to the exact line, the
-   rule, and a description. Pull requests also get inline annotations.
+```sh
+git clone --recurse-submodules <repo-url>
+# or, in an existing clone:
+git submodule update --init --recursive
+```
+
+The workflow checks out submodules automatically, so CI always scans PyGoat.
+
+## Using the pipeline in another repository
+
+1. **Fork or copy.** Forking this repository is the quickest start; alternatively
+   the `.github/`, `cmd/`, `internal/`, and `semgrep-rules/` directories plus
+   `go.mod` can be copied into another project.
+2. **Enable code scanning.** Under **Settings → Code security and analysis →
+   Code scanning**, code scanning must be enabled. The workflow uploads SARIF
+   itself, so CodeQL's "default setup" is not required — and if it is enabled it
+   should be disabled, to avoid clashing with this "advanced" workflow. Private
+   repositories require GitHub Advanced Security for code scanning.
+3. **Push or open a pull request.** The `SAST` workflow runs on both `push` and
+   `pull_request`.
+4. **Read the results.** The **Security → Code scanning** tab lists every alert,
+   filterable by **Tool** so Semgrep, CodeQL, and Gitleaks stay separate (each
+   uploaded under its own category). Every alert links to the exact line, the
+   rule, and a description. Pull requests also receive inline annotations.
 5. **The gate.** The `SAST gate` job posts a Markdown summary (severity
-   breakdown + every deduplicated finding) to the run's summary page and fails
-   the build when something reaches the threshold. Change the threshold by
-   editing `SAST_THRESHOLD` at the top of `.github/workflows/sast.yml`
+   breakdown plus every deduplicated finding) to the run's summary page and
+   fails the build when a finding reaches the threshold. The threshold is set by
+   the `SAST_THRESHOLD` value at the top of `.github/workflows/sast.yml`
    (`CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, or `NONE`).
 
-### Adapting it to your stack
+### Adapting it to another stack
 
-- **Languages:** change `languages:` in the CodeQL job and point Semgrep at the
+- **Languages:** adjust `languages:` in the CodeQL job and point Semgrep at the
   relevant rulesets. Semgrep auto-detects languages from the files it scans.
-- **Custom rules:** drop more `.yml` files into `semgrep-rules/`. Give each rule
-  a `metadata.security-severity` score so the gate (and GitHub) can bucket it.
+- **Custom rules:** more `.yml` files can be added to `semgrep-rules/`. Each rule
+  should carry a `metadata.security-severity` score so the gate (and GitHub) can
+  bucket it.
 - **More scanners:** any SARIF-producing tool can be added as another job that
   uploads with its own category and shares its SARIF as an artifact named
   `sarif-<tool>`; the gate picks up every `*.sarif` artifact automatically.
