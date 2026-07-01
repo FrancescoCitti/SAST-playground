@@ -1,9 +1,10 @@
 name: Ad-hoc scan
 
 # On-demand SAST run. Feed it either a public repo/gist URL to clone, or a
-# file's contents from the gh CLI, and it runs Semgrep + Gitleaks + CodeQL and
-# the gate against that input. The target is only ever read (statically
-# scanned) — it is never executed.
+# file's contents from the gh CLI, and it runs the same tool set as the main
+# pipeline — Semgrep, Gitleaks, CodeQL, OSV-Scanner (SCA), Checkov (IaC), zizmor
+# (CI/CD) and a Syft SBOM — plus the gate, against that input. The target is
+# only ever read (statically scanned) — it is never executed.
 #
 # Examples:
 #   # Scan a public repository:
@@ -48,6 +49,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GITLEAKS_VERSION: "8.21.2"
+      OSV_VERSION: "2.4.0"
     steps:
       # Checkout is needed for the custom Semgrep rules and the gate source.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -88,13 +90,22 @@ jobs:
           echo "--- files to scan ---"
           find scan-input -type f | head -100
 
-      - name: Install Semgrep and Gitleaks
+      - name: Install scanners
         run: |
           set -euo pipefail
-          pip install --quiet semgrep
+          # Python tools go in isolated venvs (their pinned deps otherwise
+          # collide in a shared environment).
+          pipx install semgrep
+          pipx install checkov
+          pipx install zizmor
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          # Gitleaks
           curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
             | tar -xz gitleaks
           sudo install gitleaks /usr/local/bin/gitleaks
+          # OSV-Scanner
+          curl -sSL "https://github.com/google/osv-scanner/releases/download/v${OSV_VERSION}/osv-scanner_linux_amd64" -o osv-scanner
+          sudo install osv-scanner /usr/local/bin/osv-scanner
 
       - name: Run Semgrep
         continue-on-error: true
@@ -118,6 +129,37 @@ jobs:
             --report-path gitleaks.sarif \
             --redact \
             --exit-code 0
+
+      - name: Run OSV-Scanner
+        continue-on-error: true
+        run: |
+          osv-scanner scan source --recursive scan-input \
+            --format sarif --output osv.sarif || true
+          if [ -f osv.sarif ]; then
+            jq --arg ws "file://$GITHUB_WORKSPACE/" '
+              walk(if type == "object" and (.uri? | type == "string") and (.uri | startswith($ws))
+                   then .uri |= .[($ws | length):] else . end)
+            ' osv.sarif > osv.norm.sarif && mv osv.norm.sarif osv.sarif
+          fi
+
+      - name: Run Checkov
+        continue-on-error: true
+        run: |
+          checkov -d scan-input \
+            --output sarif --output-file-path . \
+            --compact --quiet || true
+          [ -f results_sarif.sarif ] && mv results_sarif.sarif checkov.sarif || true
+
+      - name: Run zizmor
+        continue-on-error: true
+        # Only fires if the target actually ships GitHub Actions workflows.
+        run: |
+          wf="$(find scan-input -type d -path '*/.github/workflows' | head -1)"
+          if [ -n "$wf" ]; then
+            zizmor --format sarif --offline "$wf" > zizmor.sarif || true
+          else
+            echo "No .github/workflows in the target — skipping zizmor."
+          fi
 
       # CodeQL builds a database, so it is slower and only covers Python here. If
       # the target has no Python it is simply skipped (continue-on-error), and
@@ -155,7 +197,7 @@ jobs:
           shopt -s nullglob
           # Collect only the SARIF files that were actually produced.
           SARIFS=()
-          for f in semgrep.sarif gitleaks.sarif codeql-results/*.sarif; do
+          for f in semgrep.sarif gitleaks.sarif osv.sarif checkov.sarif zizmor.sarif codeql-results/*.sarif; do
             [ -f "$f" ] && SARIFS+=("$f")
           done
           echo "Merging: ${SARIFS[*]:-<none>}"
@@ -213,6 +255,30 @@ jobs:
           path: codeql-results/*.sarif
           if-no-files-found: ignore
 
+      - name: Upload OSV SARIF
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: adhoc-osv-sarif
+          path: osv.sarif
+          if-no-files-found: ignore
+
+      - name: Upload Checkov SARIF
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: adhoc-checkov-sarif
+          path: checkov.sarif
+          if-no-files-found: ignore
+
+      - name: Upload zizmor SARIF
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: adhoc-zizmor-sarif
+          path: zizmor.sarif
+          if-no-files-found: ignore
+
       - name: Upload merged SARIF
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -220,3 +286,12 @@ jobs:
           name: adhoc-merged-sarif
           path: merged.sarif
           if-no-files-found: ignore
+
+      - name: Generate and upload SBOM
+        if: always()
+        continue-on-error: true
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          path: scan-input
+          format: cyclonedx-json
+          artifact-name: adhoc-sbom.cyclonedx.json
