@@ -30,19 +30,35 @@ push / pull_request
 | `vulnerable-app/` | A deliberately vulnerable Flask app so every scanner fires. |
 | `third-party/pygoat` | OWASP PyGoat, a well-known vulnerable Django app, pinned as a submodule. |
 | `third-party/vampi` | VAmPI, a vulnerable REST API (OWASP API Top 10), pinned as a submodule. |
+| `third-party/requests` | `psf/requests`, a clean, well-maintained library used as a known-good baseline, pinned as a submodule. |
 | `Makefile` | Local build/test/gate helpers. |
 
 ## The scanners
 
-| Tool | What it does here | Configuration |
-|---|---|---|
-| **Semgrep CE** | Primary pattern scanner. | `p/owasp-top-ten`, `p/security-audit`, `p/secrets`, plus the local `semgrep-rules/` directory. |
-| **CodeQL** | Deep dataflow / taint tracking. | `security-extended` query suite, Python. |
-| **Gitleaks** | Hardcoded secrets across **full git history**. | Default ruleset, `fetch-depth: 0`. |
+Each concern gets its own tool and its own job. The first three cover code and
+secrets; the next three complement them with dependencies, infrastructure, and
+the security of the CI workflows themselves.
 
-Each scanner uploads its SARIF with a **distinct category** via
+| Tool | Concern | Configuration |
+|---|---|---|
+| **Semgrep CE** | Code SAST (patterns) | `p/owasp-top-ten`, `p/security-audit`, `p/secrets`, plus the local `semgrep-rules/` directory. |
+| **CodeQL** | Code SAST (dataflow / taint) | `security-extended` query suite, Python. |
+| **Gitleaks** | Secrets | Default ruleset, filesystem scan of the current target. |
+| **OSV-Scanner** | Dependencies (SCA) | Known CVEs in this repo's own manifests (`go.mod`, `vulnerable-app/requirements.txt`). Emits proper CVSS scores. |
+| **Checkov** | IaC / misconfiguration | Dockerfiles, workflows, K8s. Scoped to our own files (`--skip-path third-party`). |
+| **zizmor** | CI/CD workflow security | Audits `.github/workflows` for injection, unpinned actions, over-broad permissions. |
+| **Syft** | SBOM (informational) | Produces a CycloneDX SBOM artifact; **not** fed into the gate. |
+
+Each findings tool uploads its SARIF with a **distinct category** via
 `github/codeql-action/upload-sarif`, so results stay separable in the Security
-tab and re-runs replace (rather than duplicate) prior results.
+tab and re-runs replace (rather than duplicate) prior results. All GitHub
+Actions are pinned to commit SHAs (kept clean by zizmor's own audit).
+
+> **Severity note.** OSV, Semgrep, and CodeQL emit numeric `security-severity`,
+> so their findings bucket precisely. Checkov and zizmor do not, so the gate
+> treats their `error`-level findings as **policy signals** and caps them at
+> MEDIUM — visible in the Security tab, but not enough on their own to fail a
+> HIGH gate. See `internal/sarif/severity.go`.
 
 ## The gate binary (`sarifgate`)
 
