@@ -4,3 +4,6 @@
 [submodule "third-party/vampi"]
 	path = third-party/vampi
 	url = https://github.com/erev0s/VAmPI
+[submodule "third-party/requests"]
+	path = third-party/requests
+	url = https://github.com/psf/requests

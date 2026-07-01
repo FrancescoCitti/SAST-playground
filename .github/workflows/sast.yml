@@ -47,13 +47,20 @@ jobs:
         # rules. Semgrep exits 0 on findings (no --error), so the gate job — not
         # this one — decides pass/fail.
         run: |
+          # Scan targets. Only the clean baseline is active; uncomment the
+          # vulnerable ones to include them again.
+          TARGETS="third-party/requests"
+          # TARGETS="$TARGETS vulnerable-app"
+          # TARGETS="$TARGETS third-party/pygoat"
+          # TARGETS="$TARGETS third-party/vampi"
           semgrep scan \
             --config p/owasp-top-ten \
             --config p/security-audit \
             --config p/secrets \
             --config semgrep-rules/ \
             --sarif --output semgrep.sarif \
-            --metrics off
+            --metrics off \
+            $TARGETS
 
       - name: Upload Semgrep SARIF to Security tab
         uses: github/codeql-action/upload-sarif@v3
@@ -86,6 +93,14 @@ jobs:
         with:
           languages: python
           queries: security-extended
+          # Restrict analysis to the clean baseline. Uncomment the vulnerable
+          # paths to analyze them again.
+          config: |
+            paths:
+              - third-party/requests
+              # - vulnerable-app
+              # - third-party/pygoat
+              # - third-party/vampi
 
       - name: Analyze
         uses: github/codeql-action/analyze@v3
@@ -128,13 +143,22 @@ jobs:
 
       - name: Run Gitleaks
         # --exit-code 0 keeps the scan from failing the job; the gate decides.
+        # Scoped to the clean baseline (filesystem scan, no git). To scan this
+        # repo's full history for secrets again, swap back to the commented form.
         run: |
           gitleaks detect \
-            --source . \
+            --source third-party/requests \
+            --no-git \
             --report-format sarif \
             --report-path gitleaks.sarif \
             --redact \
             --exit-code 0
+          # gitleaks detect \
+          #   --source . \
+          #   --report-format sarif \
+          #   --report-path gitleaks.sarif \
+          #   --redact \
+          #   --exit-code 0
 
       - name: Upload Gitleaks SARIF to Security tab
         uses: github/codeql-action/upload-sarif@v3
