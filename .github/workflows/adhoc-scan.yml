@@ -42,6 +42,9 @@ on:
 permissions:
   contents: read
   actions: read
+  # read-only: lets CodeQL query its feature-flag API without being able to
+  # write anything to the Security tab (SARIF still uses upload: never).
+  security-events: read
 
 jobs:
   adhoc:
@@ -88,7 +91,9 @@ jobs:
             exit 1
           fi
           echo "--- files to scan ---"
-          find scan-input -type f | head -100
+          # || true: with pipefail, head closing early makes find exit 141
+          # (SIGPIPE) on targets with >100 files. This line is informational.
+          find scan-input -type f | head -100 || true
 
       - name: Install scanners
         run: |
@@ -154,7 +159,7 @@ jobs:
         continue-on-error: true
         # Only fires if the target actually ships GitHub Actions workflows.
         run: |
-          wf="$(find scan-input -type d -path '*/.github/workflows' | head -1)"
+          wf="$(find scan-input -type d -path '*/.github/workflows' | head -1 || true)"
           if [ -n "$wf" ]; then
             zizmor --format sarif --offline "$wf" > zizmor.sarif || true
           else
@@ -181,6 +186,9 @@ jobs:
         with:
           output: codeql-results
           upload: never
+          # Ad-hoc runs persist nothing; skip the CodeQL database upload (which
+          # otherwise errors without security-events: write).
+          upload-database: false
 
       - name: Build the gate binary
         if: always()
